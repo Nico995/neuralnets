@@ -90,6 +90,31 @@ class Conv2D(nn.Module):
         return self.unit(inputs)
 
 
+class Deconv2D(nn.Module):
+    """
+    2D de-convolutional layer
+
+    :param in_channels: number of input channels
+    :param out_channels: number of output channels
+    :param optional deconv: us deconvolution or upsampling layers
+    :param optional bias: use bias term or not
+    :param optional activation: specify activation function ("relu", "sigmoid" or None)
+    """
+
+    def __init__(self, in_channels, out_channels, bias=True, activation='relu'):
+        super().__init__()
+
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, bias=bias)
+
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'sigmoid':
+            self.activation = nn.Sigmoid()
+
+    def forward(self, inputs):
+        return self.activation(self.up(inputs))
+
+
 class DenseLayer2D(nn.Module):
     """
     2D Dense convolutional layer
@@ -408,3 +433,17 @@ class UNetUpSamplingBlock3D(nn.Module):
     def forward_standard(self, inputs):
 
         return self.up(inputs)
+
+
+class FCNHead(nn.Sequential):
+    def __init__(self, in_channels: int, channels: int) -> None:
+        inter_channels = in_channels // 4
+        layers = [
+            nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(inter_channels),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Conv2d(inter_channels, channels, 1),
+        ]
+
+        super().__init__(*layers)

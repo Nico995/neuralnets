@@ -1,8 +1,10 @@
+import builtins
 import random
 
 import numpy as np
 import torch
 import torchvision.utils as vutils
+from numpy.linalg import norm
 
 from neuralnets.util.io import read_volume, mkdir
 
@@ -155,6 +157,8 @@ def parse_params(params):
         params['log_refresh_rate'] = None if params['log_refresh_rate'] < 0 else int(params['log_refresh_rate'])
     if 'train_val_test_split' in keys:
         params['train_val_test_split'] = [float(item) for item in params['train_val_test_split'].split(',')]
+    if 'train_val_test_pretext_split' in keys:
+        params['train_val_test_pretext_split'] = [float(item) for item in params['train_val_test_pretext_split'].split(',')]
     if 'residual_connections' in keys:
         params['residual_connections'] = bool(params['residual_connections'])
 

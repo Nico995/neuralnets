@@ -1,15 +1,11 @@
-import os
-
-import numpy as np
-import torch
+import pytorch_lightning as pl
 import torch.nn as nn
 from torch.autograd import Variable
-from torch.utils.tensorboard import SummaryWriter
+from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
 from neuralnets.networks.blocks import UNetConvBlock2D, UNetUpSamplingBlock2D
-from neuralnets.util.io import print_frm
-from neuralnets.util.tools import *
 from neuralnets.util.losses import get_loss_function
+from neuralnets.util.tools import *
 
 
 def _reparametrise(mu, logvar):
@@ -157,7 +153,7 @@ class Decoder(nn.Module):
         return decoder_outputs, outputs
 
 
-class BVAE(nn.Module):
+class BVAE(pl.LightningModule):
     """
     2D beta variational autoencoder (VAE)
 
@@ -173,8 +169,9 @@ class BVAE(nn.Module):
     :param optional norm: specify normalization ("batch", "instance" or None)
     """
 
-    def __init__(self, beta=0, input_size=512, bottleneck_dim=2, in_channels=1, out_channels=1, feature_maps=64,
-                 levels=5, norm='instance', activation='relu', dropout_enc=0.0, dropout_dec=0.0):
+    def __init__(self, beta=0.5, input_size=512, bottleneck_dim=2, in_channels=1, out_channels=1, feature_maps=64,
+                 levels=5, norm='instance', activation='relu', dropout_enc=0.0, dropout_dec=0.0, step_size=2, gamma=0.1,
+                 lr=0.001):
         super(BVAE, self).__init__()
 
         self.beta = beta
@@ -191,8 +188,15 @@ class BVAE(nn.Module):
         self.logvar = None
         self.z = None
 
+        self.step_size = step_size
+        self.gamma = gamma
+        self.lr = lr
+
         self.loss_rec_fn = get_loss_function('mse')
         self.loss_kl_fn = get_loss_function('kld')
+
+        self.train_batch_id = 0
+        self.val_batch_id = 0
 
         # contractive path
         self.encoder = Encoder(input_size=input_size, bottleneck_dim=bottleneck_dim, in_channels=in_channels,
@@ -219,198 +223,63 @@ class BVAE(nn.Module):
 
         return outputs
 
-    def train_epoch(self, loader, optimizer, epoch, augmenter=None, print_stats=1, writer=None,
-                    write_images=False, device=0):
-        """
-        Trains the network for one epoch
-        :param loader: dataloader
-        :param optimizer: optimizer for the loss function
-        :param epoch: current epoch
-        :param augmenter: data augmenter
-        :param print_stats: frequency of printing statistics
-        :param writer: summary writer
-        :param write_images: frequency of writing images
-        :param device: GPU device where the computations should occur
-        :return: average training loss over the epoch
-        """
-        # make sure network is on the gpu and in training mode
-        module_to_device(self, device)
-        self.train()
+    def training_step(self, batch, batch_idx):
 
-        # keep track of the average losses during the epoch
-        loss_rec_cum = 0.0
-        loss_kl_cum = 0.0
-        loss_cum = 0.0
-        cnt = 0
+        x = batch
 
-        # start epoch
-        for i, data in enumerate(loader):
+        # forward prop
+        y_pred = torch.sigmoid(self(x))
 
-            # transfer to suitable device
-            x = tensor_to_device(data.float(), device)
+        # compute loss
+        loss_rec = self.loss_rec_fn(y_pred, x)
+        loss_kl = self.loss_kl_fn(self.mu, self.logvar)
+        loss = loss_rec + self.beta * loss_kl
 
-            # get the inputs and augment if necessary
-            if augmenter is not None:
-                x = augmenter(x)
+        # log images
+        if batch_idx == self.train_batch_id:
+            self._log_result(y_pred.detach().cpu().numpy() * 255, prefix='train/pred')
+            self._log_result(x.detach().cpu().numpy() * 255, prefix='train/truth')
 
-            # zero the gradient buffers
-            self.zero_grad()
+        # compute mse
+        self.log('train/mse', loss_rec, prog_bar=True)
+        self.log('train/kld', loss_kl, prog_bar=True)
+        self.log('train/loss', loss)
 
-            # forward prop
-            x_pred = torch.sigmoid(self(x))
+        return loss
 
-            # compute loss
-            loss_rec = self.loss_rec_fn(x_pred, x)
-            loss_kl = self.loss_kl_fn(self.mu, self.logvar)
-            loss = loss_rec + self.beta * loss_kl
-            loss_rec_cum += loss_rec.data.cpu().numpy()
-            loss_kl_cum += loss_kl.data.cpu().numpy()
-            loss_cum += loss.data.cpu().numpy()
-            cnt += 1
+    def validation_step(self, batch, batch_idx):
 
-            # backward prop
-            loss.backward()
+        x = batch
 
-            # apply one step in the optimization
-            optimizer.step()
+        # forward prop
+        y_pred = torch.sigmoid(self(x))
 
-            # print statistics if necessary
-            if i % print_stats == 0:
-                print_frm('Epoch %5d - Iteration %5d/%5d - Loss Rec: %.6f - Loss KL: %.6f - Loss: %.6f' % (
-                    epoch, i, len(loader.dataset) / loader.batch_size, loss_rec, loss_kl, loss))
+        # compute loss
+        loss_rec = self.loss_rec_fn(y_pred, x)
+        loss_kl = self.loss_kl_fn(self.mu, self.logvar)
+        loss = loss_rec + self.beta * loss_kl
 
-        # don't forget to compute the average and print it
-        loss_rec_avg = loss_rec_cum / cnt
-        loss_kl_avg = loss_kl_cum / cnt
-        loss_avg = loss_cum / cnt
-        print_frm(
-            'Epoch %5d - Average train loss rec: %.6f - Average train loss KL: %.6f - Average train loss: %.6f' % (
-                epoch, loss_rec_avg, loss_kl_avg, loss_avg))
+        # log images
+        if batch_idx == self.train_batch_id:
+            self._log_result(y_pred.detach().cpu().numpy() * 255, prefix='train/pred')
+            self._log_result(x.detach().cpu().numpy() * 255, prefix='train/truth')
 
-        # log everything
-        if writer is not None:
+        # compute mse
+        self.log('val/mse', loss_rec, prog_bar=True)
+        self.log('val/kld', loss_kl, prog_bar=True)
+        self.log('val/loss', loss)
 
-            # always log scalars
-            log_scalars([loss_rec_avg, loss_kl_avg, loss_avg], ['train/' + s for s in ['loss-rec', 'loss-kl', 'loss']],
-                        writer, epoch=epoch)
+        return loss
 
-            # log images if necessary
-            if write_images:
-                log_images_2d([x, x_pred], ['train/' + s for s in ['x', 'x_pred']], writer, epoch=epoch)
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer_dict = {"optimizer": optimizer}
+        scheduler = ReduceLROnPlateau(optimizer, 'max', patience=self.step_size, factor=self.gamma)
+        optimizer_dict.update({"lr_scheduler": scheduler, "monitor": 'val/loss'})
+        return optimizer_dict
 
-        return loss_avg
+    def _log_result(self, y_pred, prefix='train'):
+        # get the tensorboard summary writer
+        tensorboard = self.logger.experiment
 
-    def test_epoch(self, loader, epoch, writer=None, write_images=False, device=0):
-        """
-        Tests the network for one epoch
-        :param loader: dataloader
-        :param epoch: current epoch
-        :param writer: summary writer
-        :param write_images: frequency of writing images
-        :param device: GPU device where the computations should occur
-        :return: average testing loss over the epoch
-        """
-        # make sure network is on the gpu and in training mode
-        module_to_device(self, device)
-        self.eval()
-
-        # keep track of the average losses during the epoch
-        loss_rec_cum = 0.0
-        loss_kl_cum = 0.0
-        loss_cum = 0.0
-        cnt = 0
-
-        # start epoch
-        z = []
-        li = []
-        for i, data in enumerate(loader):
-            # transfer to suitable device
-            x = tensor_to_device(data.float(), device)
-
-            # forward prop
-            x_pred = torch.sigmoid(self(x))
-            z.append(_reparametrise(self.mu, self.logvar).cpu().data.numpy())
-            li.append(x.cpu().data.numpy())
-
-            # compute loss
-            loss_rec = self.loss_rec_fn(x_pred, x)
-            loss_kl = self.loss_kl_fn(self.mu, self.logvar)
-            loss = loss_rec + self.beta * loss_kl
-            loss_rec_cum += loss_rec.data.cpu().numpy()
-            loss_kl_cum += loss_kl.data.cpu().numpy()
-            loss_cum += loss.data.cpu().numpy()
-            cnt += 1
-
-        # don't forget to compute the average and print it
-        loss_rec_avg = loss_rec_cum / cnt
-        loss_kl_avg = loss_kl_cum / cnt
-        loss_avg = loss_cum / cnt
-        print_frm('Epoch %5d - Average test loss rec: %.6f - Average test loss KL: %.6f - Average test loss: %.6f' % (
-            epoch, loss_rec_avg, loss_kl_avg, loss_avg))
-
-        # log everything
-        if writer is not None:
-
-            # always log scalars
-            log_scalars([loss_rec_avg, loss_kl_avg, loss_avg], ['test/' + s for s in ['loss-rec', 'loss-kl', 'loss']],
-                        writer, epoch=epoch)
-
-            # log images if necessary
-            if write_images:
-                log_images_2d([x, x_pred], ['test/' + s for s in ['x', 'x_pred']], writer, epoch=epoch)
-
-        return loss_avg
-
-    def train_net(self, train_loader, test_loader, optimizer, epochs, scheduler=None, test_freq=1, augmenter=None,
-                  print_stats=1, log_dir=None, write_images_freq=1, device=0):
-        """
-        Trains the network
-        :param train_loader: data loader with training data
-        :param test_loader: data loader with testing data
-        :param optimizer: optimizer for the loss function
-        :param epochs: number of training epochs
-        :param scheduler: optional scheduler for learning rate tuning
-        :param test_freq: frequency of testing
-        :param augmenter: data augmenter
-        :param print_stats: frequency of logging statistics
-        :param log_dir: logging directory
-        :param write_images_freq: frequency of writing images
-        :param device: GPU device where the computations should occur
-        """
-        # log everything if necessary
-        if log_dir is not None:
-            writer = SummaryWriter(log_dir=log_dir)
-        else:
-            writer = None
-
-        test_loss_min = np.inf
-        for epoch in range(epochs):
-
-            print_frm('Epoch %5d/%5d' % (epoch, epochs))
-
-            # train the model for one epoch
-            self.train_epoch(loader=train_loader, optimizer=optimizer, epoch=epoch, augmenter=augmenter,
-                             print_stats=print_stats, writer=writer, write_images=epoch % write_images_freq == 0,
-                             device=device)
-
-            # adjust learning rate if necessary
-            if scheduler is not None:
-                scheduler.step()
-
-                # and keep track of the learning rate
-                writer.add_scalar('learning_rate', float(scheduler.get_last_lr()[0]), epoch)
-
-            # test the model for one epoch is necessary
-            if epoch % test_freq == 0:
-                test_loss = self.test_epoch(loader=test_loader, epoch=epoch, writer=writer, write_images=True,
-                                            device=device)
-
-                # and save model if lower test loss is found
-                if test_loss < test_loss_min:
-                    test_loss_min = test_loss
-                    save_net(self, os.path.join(log_dir, 'best_checkpoint.pytorch'))
-
-            # save model every epoch
-            save_net(self, os.path.join(log_dir, 'checkpoint.pytorch'))
-
-        writer.close()
+        tensorboard.add_images(prefix, y_pred, global_step=self.current_epoch, dataformats='NCHW')

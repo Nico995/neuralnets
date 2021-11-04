@@ -1,0 +1,175 @@
+# ============================================================================ #
+# ================================ CONFIG FILE =============================== #
+# ============================================================================ #
+
+
+# --------------------------------------------------------------------- #
+# -------------------------------- DATA ------------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ dataset ___ #
+# base
+in_channels: &in_channels 1
+in_size: &in_size 128
+fit_images: &fit_images /home/nicola/data/electron/images/training.tif
+fit_labels: &fit_labels /home/nicola/data/electron/labels_01/training.tif
+
+test_images: &test_images /home/nicola/data/electron/images/testing.tif
+test_labels: &test_labels /home/nicola/data/electron/labels_01/testing.tif
+
+dataset_base: &dataset_properties
+  input_shape: &input_shape
+    - *in_channels
+    - *in_size
+    - *in_size
+  in_channels: *in_channels
+  type: tif3d
+  range_dir: z
+  norm_type: unit
+
+dataset: &dataset
+  train:
+    name: RotationVolumeDataset
+    data: *fit_images
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0
+      - 0.8
+  val:
+    name: RotationSlidingWindowDataset
+    data: *fit_images
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0.8
+      - 1
+  test:
+    name: RotationSlidingWindowDataset
+    data: *test_images
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0
+      - 1
+
+# ___ datamodule ___ #
+datamodule:
+  dataset_hparams: *dataset
+  workers:
+    train: 12
+    val: 12
+    test: 12
+
+# ___ transforms ___ # (Optional)
+#transforms:
+#  - name: rotate90
+#  - name: Flip
+#    prob: 0.5
+#    dim: 0
+
+
+# --------------------------------------------------------------------- #
+# --------------------------- OPTIMIZATION ---------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ optimizer ___ #
+optimizer: &optimizer
+  name: Adam
+  lr: 0.0001
+  weight_decay: 0.0001
+
+# ___ scheduler ___ #
+scheduler: &scheduler
+  name: ReduceLROnPlateau
+  monitor: val/Accuracy
+  patience: 10
+  factor: 0.5
+
+# ___ loss ___ #
+loss: &loss
+  name: CELoss
+
+# ___ metric ___ #
+metric: &metric
+  name: Accuracy
+
+
+# --------------------------------------------------------------------- #
+# -------------------------- LIGHTNING MODEL -------------------------- #
+# --------------------------------------------------------------------- #
+
+common: &common
+  feature_maps: 16
+  levels: 4
+
+encoder: &encoder
+  in_channels: *in_channels
+  <<: *common
+  norm: batch
+  dropout: 0.0
+  activation: relu
+
+decoder: &decoder
+  input_shape: *input_shape
+  <<: *common
+  out_channels: 4
+
+model:
+  name: UNetRotation2D
+  encoder_hparams: *encoder
+  decoder_hparams: *decoder
+  loss_hparams: *loss
+  optimizer_hparams: *optimizer
+  metric_hparams: *metric
+  scheduler_hparams: *scheduler
+  input_shape: *input_shape
+  with_labels: True
+  log_images_type: None
+  save_checkpoints: False
+  return_features: False
+
+
+# ___ load pretrained ___ # (Optional)
+#pretrained_model: /home/nicola/Documents/remote_pycharm_projects/neuralnets/neuralnets/train/ss_ae/unet_2d_pretext_ae/lightning_logs/version_0/checkpoints/epoch=30-step=5982.ckpt
+#drop_parameters:
+#  - decoder.output.weight
+#  - decoder.output.bias
+#freeze_weights: False
+
+
+# ------------------------------------------------------------- #
+# ------------------------- CALLBACKS ------------------------- #
+# ------------------------------------------------------------- #
+
+# ___ checkpoint ___ #
+callbacks:
+  - name: ModelCheckpoint
+    save_top_k: 1
+    verbose: False
+    monitor: val/Accuracy
+    mode: max
+    every_n_epochs: 1
+  - name: EarlyStopping
+    monitor: val/Accuracy
+    min_delta: 0.01
+    patience: 21
+    mode: max
+  - name: LearningRateMonitor
+
+
+# --------------------------------------------------------------------- #
+# ------------------------- RUN CONFIGURATION ------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ trainer ___ #
+
+trainer:
+  max_epochs: 100
+  gpus: '4'
+  accelerator: dp
+  flush_logs_every_n_steps: 10
+  log_every_n_steps: 1
+  progress_bar_refresh_rate: 1
+
+seed: 0

@@ -9,7 +9,6 @@ from copy import copy
 
 from neuralnets.util.tools import tensor_to_device
 
-
 class CrossEntropyLoss(nn.Module):
     """
     Cross entropy loss function
@@ -400,6 +399,7 @@ def get_loss_function(s):
     t = s.lower().replace("-", "_").split('#')
     name = t[0]
     params = _parse_loss_params(t[1:])
+
     if name == "ce" or name == "cross_entropy":
         return CrossEntropyLoss(**params)
     elif name == "fl" or name == "focal":
@@ -414,3 +414,31 @@ def get_loss_function(s):
         return nn.MSELoss(**params)
     elif name == "kld":
         return KLDLoss(**params)
+
+
+########################################
+# ---------- Wrapped Losses ---------- #
+########################################
+
+
+class CELoss:
+    def __init__(self):
+        self.loss_fn = nn.CrossEntropyLoss()
+
+    def __call__(self, preds, labels, w=None):
+        return self.loss_fn(preds.double(), labels[:, 0, ...].long())
+
+
+class MSELoss:
+    def __init__(self):
+        self.loss_fn = nn.MSELoss()
+
+    def __call__(self, preds, labels):
+        return self.loss_fn(preds, labels)
+
+class DICELoss:
+    def __init__(self):
+        self.loss_fn = DiceLoss()
+
+    def  __call__(self, preds, labels):
+        return self.loss_fn(preds, labels)

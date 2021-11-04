@@ -1,0 +1,193 @@
+# ============================================================================ #
+# ================================ CONFIG FILE =============================== #
+# ============================================================================ #
+
+
+# --------------------------------------------------------------------- #
+# -------------------------------- DATA ------------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ dataset ___ #
+in_channels: &in_channels 1
+in_size: &in_size 128
+fit_images: &fit_images /home/nicola/data/electron/images/training.tif
+fit_labels: &fit_labels /home/nicola/data/electron/labels_01/training.tif
+
+test_images: &test_images /home/nicola/data/electron/images/testing.tif
+test_labels: &test_labels /home/nicola/data/electron/labels_01/testing.tif
+
+dataset_base: &dataset_properties
+  input_shape: &input_shape
+    - *in_channels
+    - *in_size
+    - *in_size
+  in_channels: *in_channels
+  type: tif3d
+  range_dir: z
+  norm_type: unit
+
+dataset: &dataset
+  train:
+    name: LabeledVolumeDataset
+    data: *fit_images
+    labels: *fit_labels
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0
+      - 0.01
+  val:
+    name: LabeledSlidingWindowDataset
+    data: *fit_images
+    labels: *fit_labels
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0.01
+      - 1
+  test:
+    name: LabeledSlidingWindowDataset
+    data: *test_images
+    labels: *test_labels
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0
+      - 1
+
+# ___ datamodule ___ #
+datamodule:
+  dataset_hparams: *dataset
+  workers:
+    train: 12
+    val: 12
+    test: 12
+
+# ___ transforms ___ # (Optional)
+#transforms:
+#  - name: Rotate90
+#  - name: Flip
+#    prob: 0.5
+#    dim: 0
+#  - name: Flip
+#    prob: 0.5
+#    dim: 1
+#  - name: ContrastAdjust
+#    adj: 0.1
+#  - name: RandomDeformation
+#  - name: AddNoise
+#    sigma_max: 0.05
+
+
+# --------------------------------------------------------------------- #
+# --------------------------- OPTIMIZATION ---------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ optimizer ___ #
+optimizer: &optimizer
+  name: Adam
+  lr: 0.001
+  weight_decay: 0.0001
+
+# ___ scheduler ___ #
+scheduler: &scheduler
+  name: ReduceLROnPlateau
+  monitor: val/mIoU
+  patience: 10
+  factor: 0.5
+  mode: max
+
+# ___ loss ___ #
+loss: &loss
+  name: CELoss
+
+# ___ metric ___ #
+metric: &metric
+  name: mIoU
+
+
+# --------------------------------------------------------------------- #
+# -------------------------- LIGHTNING MODEL -------------------------- #
+# --------------------------------------------------------------------- #
+
+common: &common
+  feature_maps: 16
+  levels: 4
+
+encoder: &encoder
+  in_channels: *in_channels
+  <<: *common
+  norm: batch
+  dropout: 0.0
+  activation: relu
+
+decoder: &decoder
+  out_channels: 2
+  <<: *common
+  norm: batch
+  dropout: 0.0
+  activation: relu
+  skip_connections: True
+
+model:
+  name: UNet2D
+  encoder_hparams: *encoder
+  decoder_hparams: *decoder
+  loss_hparams: *loss
+  optimizer_hparams: *optimizer
+  metric_hparams: *metric
+  scheduler_hparams: *scheduler
+  input_shape: *input_shape
+  with_labels: True
+  log_images_type: masked
+  save_checkpoints: False
+  return_features: False
+
+
+# ___ load pretrained ___ # (Optional)
+
+pretrained_params:
+  pretrained_model: /home/nicola/Documents/remote_pycharm_projects/neuralnets/neuralnets/train/logs/pretext_autoencoding/lightning_logs/version_0/checkpoints/epoch=26-step=1349.ckpt
+  drop_parameters:
+    - decoder.output.weight
+    - decoder.output.bias
+  pretext_used_skip: False
+
+
+# ------------------------------------------------------------- #
+# ------------------------- CALLBACKS ------------------------- #
+# ------------------------------------------------------------- #
+
+# ___ checkpoint ___ #
+callbacks:
+  - name: ModelCheckpoint
+    save_top_k: 1
+    verbose: False
+    monitor: val/mIoU
+    mode: max
+    every_n_epochs: 1
+#  - name: EarlyStopping
+#    monitor: val/mIoU
+#    min_delta: 0.005
+#    patience: 21
+#    mode: max
+  # ___ lr monitor ___ #
+  - name: LearningRateMonitor
+
+
+
+# --------------------------------------------------------------------- #
+# ------------------------- RUN CONFIGURATION ------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ trainer ___ #
+
+trainer:
+  max_epochs: 100
+  gpus: '4'
+  accelerator: dp
+  flush_logs_every_n_steps: 10
+  log_every_n_steps: 1
+  progress_bar_refresh_rate: 1
+
+seed: 0

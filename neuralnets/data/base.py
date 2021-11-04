@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.random as rnd
+import tifffile
 import torch
 import torch.nn.functional as F
 import torch.utils.data as data

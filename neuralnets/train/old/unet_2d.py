@@ -56,23 +56,18 @@ if __name__ == '__main__':
                                       in_channels=params['in_channels'], type=params['type'],
                                       batch_size=params['test_batch_size'], range_split=(split[0], split[1]),
                                       range_dir=params['split_orientation'], coi=params['coi'])
-    test = LabeledSlidingWindowDataset(params['data'], params['labels'], input_shape=input_shape,
-                                       in_channels=params['in_channels'], type=params['type'],
-                                       batch_size=params['test_batch_size'], range_split=(split[1], 1),
-                                       range_dir=params['split_orientation'], coi=params['coi'])
     train_loader = DataLoader(train, batch_size=params['train_batch_size'], num_workers=params['num_workers'],
                               pin_memory=True)
     val_loader = DataLoader(val, batch_size=params['test_batch_size'], num_workers=params['num_workers'],
                             pin_memory=True)
-    test_loader = DataLoader(test, batch_size=params['test_batch_size'], num_workers=params['num_workers'],
-                             pin_memory=True)
+
     print_frm('Label distribution: ')
     for i in range(len(params['coi'])):
-        print_frm('    - Class %d: %.3f (train) - %.3f (val) - %.3f (test)' %
+        print_frm('    - Class %d: %.3f (train) - %.3f (val)' %
                   (train.label_stats[0][i][0], train.label_stats[0][i][1],
-                   val.label_stats[0][i][1], test.label_stats[0][i][1]))
-    print_frm('    - Unlabeled pixels: %.3f (train) - %.3f (val) - %.3f (test)' %
-              (train.label_stats[0][-1][1], val.label_stats[0][-1][1], test.label_stats[0][-1][1]))
+                   val.label_stats[0][i][1]))
+    print_frm('    - Unlabeled pixels: %.3f (train) - %.3f (val)' %
+              (train.label_stats[0][-1][1], val.label_stats[0][-1][1]))
 
     """
         Build the network
@@ -93,13 +88,3 @@ if __name__ == '__main__':
                          log_every_n_steps=params['log_freq'], callbacks=[checkpoint_callback],
                          progress_bar_refresh_rate=params['log_refresh_rate'])
     trainer.fit(net, train_loader, val_loader)
-
-    """
-        Validate the network
-    """
-    print_frm('Validating the network')
-    net.load_state_dict(torch.load(trainer.checkpoint_callback.best_model_path)['state_dict'])
-    validate(net, test.data[0], test.get_original_labels()[0], params['input_size'], in_channels=params['in_channels'],
-             classes_of_interest=params['coi'], batch_size=params['test_batch_size'],
-             write_dir=os.path.join(params['log_dir'], 'test_segmentation'), track_progress=True,
-             device=params['gpus'][0])

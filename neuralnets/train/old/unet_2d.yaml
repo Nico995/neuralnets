@@ -3,14 +3,14 @@
 # ===========
 #
 # data
-data: /home/jorisro/research/data/EM/EPFL/raw
-labels: /home/jorisro/research/data/EM/EPFL/labels
-train_val_test_split: 0.50,0.75
+data: /home/nicola/data/electron/images/training.tif
+labels: /home/nicola/data/electron/labels_01/training.tif
+train_val_test_split: 0.08,1
 split_orientation: z
-type: pngseq
+type: tif3d
 # network
 input_size: 256,256
-in_channels: 3
+in_channels: 1
 fm: 16
 levels: 4
 dropout: 0.00
@@ -18,14 +18,14 @@ norm: batch
 activation: relu
 coi: 0,1
 # optimization
-loss: ce
+loss: mse
 lr: 0.001
-epochs: 5
+epochs: 10
 train_batch_size: 4
 test_batch_size: 4
 # compute
 gpus: 0
-num_workers: 12
+num_workers: 6
 accelerator: dp
 # logging
 log_dir: unet_2d

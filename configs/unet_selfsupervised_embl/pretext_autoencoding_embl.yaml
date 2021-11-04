@@ -1,0 +1,167 @@
+# ============================================================================ #
+# ================================ CONFIG FILE =============================== #
+# ============================================================================ #
+
+
+# --------------------------------------------------------------------- #
+# -------------------------------- DATA ------------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ dataset ___ #
+# base
+in_channels: &in_channels 1
+in_size: &in_size 128
+fit_images: &images /srv/scratch/uysa_user3/data/EMBL/raw
+fit_labels: &labels /srv/scratch/uysa_user3/data/EMBL/labels_correct
+
+dataset_base: &dataset_properties
+  data: *images
+  input_shape: &input_shape
+    - *in_channels
+    - *in_size
+    - *in_size
+  in_channels: *in_channels
+  type: pngseq
+  range_dir: z
+  norm_type: unit
+
+dataset: &dataset
+  train:
+    name: UnlabeledVolumeDataset
+    <<: *dataset_properties
+    batch_size: 128
+    range_split:
+      - 0
+      - 0.5
+  val:
+    name: UnlabeledSlidingWindowDataset
+    <<: *dataset_properties
+    batch_size: 32
+    range_split:
+      - 0.5
+      - 0.75
+  test:
+    name: UnlabeledSlidingWindowDataset
+    <<: *dataset_properties
+    batch_size: 32
+    range_split:
+      - 0.75
+      - 1
+
+# ___ datamodule ___ #
+datamodule:
+  dataset_hparams: *dataset
+  workers:
+    train: 12
+    val: 12
+    test: 12
+
+# ___ transforms ___ # (Optional)
+#transforms:
+#  - name: rotate90
+#  - name: Flip
+#    prob: 0.5
+#    dim: 0
+
+
+# --------------------------------------------------------------------- #
+# --------------------------- OPTIMIZATION ---------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ optimizer ___ #
+optimizer: &optimizer
+  name: Adam
+  lr: 0.001
+  weight_decay: 0.0001
+
+# ___ scheduler ___ #
+scheduler: &scheduler
+  name: ReduceLROnPlateau
+  monitor: val/MeanSquaredError
+  patience: 10
+  factor: 0.1
+  mode: min
+
+# ___ loss ___ #
+loss: &loss
+  name: MSELoss
+
+# ___ metric ___ #
+metric: &metric
+  name: MeanSquaredError
+
+
+# --------------------------------------------------------------------- #
+# -------------------------- LIGHTNING MODEL -------------------------- #
+# --------------------------------------------------------------------- #
+
+common: &common
+  feature_maps: 8
+  levels: 4
+
+encoder: &encoder
+  in_channels: *in_channels
+  <<: *common
+  norm: batch
+  dropout: 0.0
+  activation: relu
+
+decoder: &decoder
+  out_channels: *in_channels
+  <<: *common
+  norm: batch
+  dropout: 0.0
+  activation: relu
+  skip_connections: False
+
+model:
+  name: UNet2D
+  encoder_hparams: *encoder
+  decoder_hparams: *decoder
+  loss_hparams: *loss
+  optimizer_hparams: *optimizer
+  metric_hparams: *metric
+  scheduler_hparams: *scheduler
+  input_shape: *input_shape
+  with_labels: False
+  log_images_type: plain
+  save_checkpoints: False
+  return_features: False
+
+
+# ------------------------------------------------------------- #
+# ------------------------- CALLBACKS ------------------------- #
+# ------------------------------------------------------------- #
+
+# ___ checkpoint ___ #
+callbacks:
+  - name: ModelCheckpoint
+    save_top_k: 1
+    verbose: True
+    monitor: val/MeanSquaredError
+    mode: min
+    every_n_epochs: 1
+  - name: EarlyStopping
+    monitor: val/MeanSquaredError
+    min_delta: 0.001
+    patience: 10
+    mode: min
+  # ___ lr monitor ___ #
+  - name: LearningRateMonitor
+
+
+# --------------------------------------------------------------------- #
+# ------------------------- RUN CONFIGURATION ------------------------- #
+# --------------------------------------------------------------------- #
+
+# ___ trainer ___ #
+
+trainer:
+  max_epochs: 100
+  gpus: '4'
+  accelerator: gpu
+  flush_logs_every_n_steps: 1
+  log_every_n_steps: 1
+  progress_bar_refresh_rate: 1
+
+seed: 0

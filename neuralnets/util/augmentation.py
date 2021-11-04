@@ -1,3 +1,5 @@
+import builtins
+
 import numpy as np
 import numpy.random as rnd
 import torch
@@ -84,6 +86,7 @@ class AddNoise(object):
 
         if rnd.rand() < self.prob:
             sigma = rnd.uniform(self.sigma_min, self.sigma_max)
+
             noise = rnd.randn(*x.shape) * sigma
             return x + noise
         else:
@@ -332,3 +335,23 @@ class CleanDeformedLabels(object):
             x[d == i] = c
 
         return x
+
+
+class PretextRotation(object):
+    """
+    Apply a random rotation of (k * 90) degrees, where k = {0, 1, 2, 3}. It also returns the degrees along with the
+    rotated image.
+
+    N.B. Since this adds a return value along with the image, it cannot be composed with other transforms.
+    """
+
+    def __init__(self):
+        pass
+
+    def __call__(self, x):
+        mult = np.random.randint(4)
+
+        if mult > 0:
+            x = torch.tensor(rotate(x, mult))
+
+        return x, torch.tensor(mult).view(1)

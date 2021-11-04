@@ -75,9 +75,7 @@ if not os.path.exists(args.log_dir):
 """
 input_shape = (1, args.input_size[0], args.input_size[1])
 print_frm('Loading data')
-augmenter = Compose(
-    [ToFloatTensor(device=args.device), Rotate90(), FlipX(prob=0.5), FlipY(prob=0.5), ContrastAdjust(adj=0.1),
-     RandomDeformation_2D(input_shape[1:], grid_size=(64, 64), sigma=0.01, device=args.device)])
+augmenter = Compose([])
 train = UnlabeledVolumeDataset(os.path.join(args.data_dir, 'EM/EPFL/train'), input_shape=input_shape,
                                len_epoch=args.len_epoch, type='pngseq')
 test = UnlabeledVolumeDataset(os.path.join(args.data_dir, 'EM/EPFL/test'), input_shape=input_shape,

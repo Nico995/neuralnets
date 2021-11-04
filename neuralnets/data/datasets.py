@@ -1,12 +1,11 @@
-
 import warnings
 
-from neuralnets.util.tools import sample_unlabeled_input, sample_synchronized, normalize, set_seed
-from neuralnets.util.augmentation import split_segmentation_transforms
-from neuralnets.data.base import *
-
+import h5py
 from skimage.measure import regionprops, label
 
+from neuralnets.data.base import *
+from neuralnets.util.augmentation import split_segmentation_transforms, PretextRotation
+from neuralnets.util.tools import sample_unlabeled_input, sample_synchronized, normalize, set_seed
 
 MAX_SAMPLING_ATTEMPTS = 20
 
@@ -224,7 +223,6 @@ def _label_stats(labels, coi):
 
 
 def _balance_weights(labels, type=None, label_stats=None):
-
     if type == 'inverse_class_balancing':
         weights = np.ones_like(labels, dtype=float)
         for i, ls in enumerate(label_stats):
@@ -451,6 +449,7 @@ class LabeledVolumeDataset(VolumeDataset):
 
         # get random sample
         x, y = sample_synchronized([self.data[data_index], self.labels[data_index]], input_shape)
+
         x = normalize(x, type=self.norm_type)
         if y is not None:
             y = y.astype(float)
@@ -527,8 +526,8 @@ class LabeledVolumeDataset(VolumeDataset):
                 p = x.shape[0]
                 q = y.shape[0]
                 x = self.x_transform(data[:p])
-                y = self.y_transform(data[p:p+q])
-                w = data[p+q:]
+                y = self.y_transform(data[p:p + q])
+                w = data[p + q:]
             else:
                 x = self.shared_transform(x)
                 x = self.x_transform(x)
@@ -603,7 +602,8 @@ class LabeledVolumeDataset(VolumeDataset):
             r = np.arange(len(self.data), dtype=int)
 
             # make sure we have at least one labeled pixel in the sample, otherwise processing is useless
-            if np.sum([len(np.intersect1d(torch.unique(y_).numpy(), self.coi)) if y_ is not None else 1 for y_ in ys]) == 0 and not self.warned:
+            if np.sum([len(np.intersect1d(torch.unique(y_).numpy(), self.coi)) if y_ is not None else 1 for y_ in
+                       ys]) == 0 and not self.warned:
                 if attempt < MAX_SAMPLING_ATTEMPTS:
                     if self.weight_balancing is not None:
                         x, y, w = self.__getitem__(i, attempt=attempt + 1)
@@ -645,7 +645,6 @@ class LabeledVolumeDataset(VolumeDataset):
 class UnlabeledVolumeDataset(VolumeDataset):
     """
     Dataset for unlabeled volumes
-
     :param data: input data, possible formats
             - path to the dataset (string)
             - preloaded 3D volume (numpy array)
@@ -688,7 +687,13 @@ class UnlabeledVolumeDataset(VolumeDataset):
                                       orientation=self.orientation)
 
         # get random sample
-        x = sample_unlabeled_input(self.data[data_index], input_shape)
+        # print(f'data type {builtins.type(self.data)} len {len(self.data)}')
+        # print(f'data content type {builtins.type(self.data[0])} shape {self.data[0].shape}')
+        x = sample_unlabeled_input(self.data[data_index], input_shape)[0]
+
+        # print(f'sampled data type {builtins.type(x)} len {len(x)}')
+        # print(f'sampled content type {builtins.type(x[0])} shape {x[0].shape}')
+        # exit()
         x = normalize(x, type=self.norm_type)
 
         # reorient sample
@@ -726,7 +731,6 @@ class UnlabeledVolumeDataset(VolumeDataset):
             xs = []
 
             for r in range(len(self.data)):
-
                 # select a sample from dataset r
                 x = self._sample(r)
 
@@ -889,8 +893,8 @@ class LabeledSlidingWindowDataset(SlidingWindowDataset):
             p = x.shape[0]
             q = y.shape[0]
             x = self.x_transform(data[:p])
-            y = self.y_transform(data[p:p+q])
-            w = w[p+q:]
+            y = self.y_transform(data[p:p + q])
+            w = w[p + q:]
 
         # transform to tensors
         x = torch.from_numpy(x).float()
@@ -951,7 +955,7 @@ class LabeledSlidingWindowDataset(SlidingWindowDataset):
 
         # make sure we have at least one labeled pixel in the sample, otherwise processing is useless
         if len(np.intersect1d(torch.unique(y).numpy(), np.arange(len(self.coi)))) == 0 and not self.warned:
-            warnings.warn("No labeled pixels found! ")
+            # warnings.warn("No labeled pixels found! ")
             self.warned = True
 
         return r, x, y
@@ -1065,3 +1069,202 @@ class UnlabeledSlidingWindowDataset(SlidingWindowDataset):
             return r, x
         else:
             return x
+
+
+class RotationSlidingWindowDataset(UnlabeledSlidingWindowDataset):
+    def __init__(self, data, input_shape=None, scaling=None, type='tif3d', in_channels=1, orientations=(0,),
+                 batch_size=1, data_dtype='uint8', norm_type='unit', transform=None, range_split=None, range_dir=None,
+                 resolution=None, match_resolution_to=None, return_domain=False):
+        super(RotationSlidingWindowDataset, self).__init__(data, input_shape, scaling, type, in_channels, orientations,
+                                                           batch_size, data_dtype, norm_type, transform, range_split,
+                                                           range_dir, resolution, match_resolution_to, return_domain)
+
+        self.pretext_rotation = PretextRotation()
+
+    def __getitem__(self, i):
+
+        r, x = self._sample_x(i)
+
+        x, y = self.pretext_rotation(x)
+
+        if self.return_domain:
+            return r, x, y
+        else:
+            return x, y
+
+
+class RotationVolumeDataset(UnlabeledVolumeDataset):
+
+    def __init__(self, data, input_shape=None, scaling=None, len_epoch=None, type='tif3d', in_channels=1,
+                 orientations=(0,), batch_size=1, dtype='uint8', norm_type='unit', transform=None, range_split=None,
+                 range_dir=None, resolution=None, match_resolution_to=None, sampling_type='joint',
+                 weight_balancing=None):
+        super().__init__(data, input_shape, scaling=scaling, len_epoch=len_epoch, type=type,
+                         in_channels=in_channels, orientations=orientations, batch_size=batch_size, dtype=dtype,
+                         norm_type=norm_type, range_split=range_split, range_dir=range_dir, resolution=resolution,
+                         match_resolution_to=match_resolution_to, sampling_type=sampling_type)
+
+        self.weight_balancing = None
+        self.transform = transform
+        self.pretext_rotation = PretextRotation()
+
+    def __getitem__(self, i):
+
+        # reorient when we start a new batch
+        if i % self.batch_size == 0:
+            self._select_orientation()
+
+        if self.sampling_type == 'single':
+
+            # randomly select a dataset
+            r = np.random.randint(len(self.data))
+
+            # select a sample from dataset r
+            x = self._sample(r)
+
+        else:  # joint sampling
+
+            xs = []
+
+            for r in range(len(self.data)):
+                # select a sample from dataset r
+                x = self._sample(r)
+
+                xs.append(x)
+
+            if len(self.data) == 1:
+                x = xs[0]
+            else:
+                x = xs
+        x, y = self.pretext_rotation(x)
+
+        # return sample
+        return x, y
+
+
+class AutoencodingVolumeDataset(UnlabeledVolumeDataset):
+    def __init__(self, data, input_shape=None, scaling=None, len_epoch=None, type='tif3d', in_channels=1,
+                 orientations=(0,), batch_size=1, dtype='uint8', norm_type='unit', transform=None, range_split=None,
+                 range_dir=None, resolution=None, match_resolution_to=None, sampling_type='joint',
+                 weight_balancing=None):
+        super().__init__(data, input_shape, scaling=scaling, len_epoch=len_epoch, type=type,
+                         in_channels=in_channels, orientations=orientations, batch_size=batch_size, dtype=dtype,
+                         norm_type=norm_type, range_split=range_split, range_dir=range_dir, resolution=resolution,
+                         match_resolution_to=match_resolution_to, sampling_type=sampling_type)
+
+        self.weight_balancing = None
+        self.transform = transform
+
+    def __getitem__(self, i):
+
+        # reorient when we start a new batch
+        if i % self.batch_size == 0:
+            self._select_orientation()
+
+        if self.sampling_type == 'single':
+
+            # randomly select a dataset
+            r = np.random.randint(len(self.data))
+
+            # select a sample from dataset r
+            x = self._sample(r)
+
+        else:  # joint sampling
+
+            xs = []
+
+            for r in range(len(self.data)):
+                # select a sample from dataset r
+                x = self._sample(r)
+
+                xs.append(x)
+
+            if len(self.data) == 1:
+                x = xs[0]
+            else:
+                x = xs
+
+        # return sample
+        return x, x
+
+
+class JigsawVolumeDataset(UnlabeledVolumeDataset):
+    def __init__(self, data, input_shape=None, scaling=None, len_epoch=None, type='tif3d', in_channels=1,
+                 orientations=(0,), batch_size=1, dtype='uint8', norm_type='unit', transform=None, range_split=None,
+                 range_dir=None, resolution=None, match_resolution_to=None, sampling_type='joint',
+                 weight_balancing=None, patch_size=42, perm_file='./max_hamming_set_100.h5'):
+        super().__init__(data, input_shape, scaling=scaling, len_epoch=len_epoch, type=type,
+                         in_channels=in_channels, orientations=orientations, batch_size=batch_size, dtype=dtype,
+                         norm_type=norm_type, range_split=range_split, range_dir=range_dir, resolution=resolution,
+                         match_resolution_to=match_resolution_to, sampling_type=sampling_type)
+
+        self.weight_balancing = None
+        self.transform = transform
+        self.patch_size = patch_size
+        self.perm_file = perm_file
+        self.permutations = self._get_permutations()
+
+    def _get_permutations(self):
+
+        f = h5py.File(self.perm_file, 'r')
+        return np.array(f['max_hamming_set'])
+
+    def _extract_jigsaw_patches(self, image):
+        # plt.imshow(image[0])
+        # plt.savefig('full_image')
+        stripes = torch.unbind(image.unfold(1, self.patch_size, self.patch_size), dim=1)
+        patches = []
+        for stripe in stripes:
+            patches.extend(torch.unbind(stripe.unfold(1, self.patch_size, self.patch_size), dim=1))
+
+        random_idx = np.random.randint(len(self.permutations))
+        random_perm = self.permutations[random_idx]
+
+        patches = [patches[i] for i in random_perm]
+
+        # fig, ax = plt.subplots(3, 3, figsize=(12, 12))
+        # ax = ax.ravel()
+        # for i in range(ax.shape[0]):
+        #     ax[i].imshow(patches[i][0])
+        #     ax[i].set_xticklabels([])
+        #     ax[i].set_yticklabels([])
+        #     ax[i].set_aspect('equal')
+        #
+        # plt.subplots_adjust(wspace=0, hspace=0)
+        # plt.savefig('patches')
+        # exit()
+
+        return patches, random_idx
+
+    def __getitem__(self, i):
+
+        # reorient when we start a new batch
+        if i % self.batch_size == 0:
+            self._select_orientation()
+
+        if self.sampling_type == 'single':
+
+            # randomly select a dataset
+            r = np.random.randint(len(self.data))
+
+            # select a sample from dataset r
+            x = self._sample(r)
+
+        else:  # joint sampling
+
+            xs = []
+
+            for r in range(len(self.data)):
+                # select a sample from dataset r
+                x = self._sample(r)
+
+                xs.append(x)
+
+            if len(self.data) == 1:
+                x = xs[0]
+            else:
+                x = xs
+
+        x, y = self._extract_jigsaw_patches(x)
+
+        return x, y
